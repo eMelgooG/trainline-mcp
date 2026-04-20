@@ -17,10 +17,21 @@ export interface JourneyResult {
 
 interface Fare {
   id: string;
-  fullPrice: { amount: number; currencyCode: string };
+  fullPrice?: { amount: number; currencyCode: string };
   fareLegs: Array<{ legId: string }>;
   fareType: string;
   availability?: { status?: string; remaining?: number };
+}
+
+interface Alternative {
+  id: string;
+  fullPrice?: { amount: number; currencyCode: string };
+  fares: string[];
+  flexibility?: { name?: string };
+}
+
+interface Section {
+  alternatives: string[];
 }
 
 interface Journey {
@@ -29,6 +40,7 @@ interface Journey {
   arriveAt: string;
   duration?: string;
   legs: string[];
+  sections?: string[];
 }
 
 interface TrainlineJourneySearchResponse {
@@ -36,6 +48,8 @@ interface TrainlineJourneySearchResponse {
     journeySearch: {
       journeys: Record<string, Journey>;
       fares: Record<string, Fare>;
+      sections?: Record<string, Section>;
+      alternatives?: Record<string, Alternative>;
     };
     fareTypes?: Record<string, { id: string; name: string }>;
   };
@@ -78,21 +92,51 @@ function parseIsoDuration(iso: string): number {
   return h * 60 + mn;
 }
 
-function findCheapestFareForJourney(
+// UK-style: fares have fullPrice + fareLegs matching journey legs
+function findCheapestFareByLegs(
   journey: Journey,
   fares: Fare[]
-): Fare | null {
+): { price: number; currency: string; fareType: string; remaining: number | null } | null {
   const journeyLegIds = new Set(journey.legs);
-  // A fare is "for this journey" if it covers exactly this journey's legs
   const matching = fares.filter(
     (f) =>
+      f.fullPrice?.amount !== undefined &&
       f.fareLegs.length === journey.legs.length &&
       f.fareLegs.every((fl) => journeyLegIds.has(fl.legId))
   );
   if (matching.length === 0) return null;
-  return matching.reduce((min, f) =>
-    f.fullPrice.amount < min.fullPrice.amount ? f : min
+  const cheapest = matching.reduce((min, f) =>
+    f.fullPrice!.amount < min.fullPrice!.amount ? f : min
   );
+  return {
+    price: cheapest.fullPrice!.amount,
+    currency: cheapest.fullPrice!.currencyCode,
+    fareType: cheapest.fareType,
+    remaining: cheapest.availability?.remaining ?? null,
+  };
+}
+
+// Continental-style (e.g. Trenitalia): prices live in alternatives linked via sections
+function findCheapestAlternative(
+  journey: Journey,
+  sections: Record<string, Section>,
+  alternatives: Record<string, Alternative>
+): { price: number; currency: string; fareType: string | null; remaining: null } | null {
+  if (!journey.sections?.length) return null;
+  const altIds = journey.sections.flatMap((sid) => sections[sid]?.alternatives ?? []);
+  const priced = altIds
+    .map((aid) => alternatives[aid])
+    .filter((a): a is Alternative => !!a?.fullPrice?.amount);
+  if (priced.length === 0) return null;
+  const cheapest = priced.reduce((min, a) =>
+    a.fullPrice!.amount < min.fullPrice!.amount ? a : min
+  );
+  return {
+    price: cheapest.fullPrice!.amount,
+    currency: cheapest.fullPrice!.currencyCode,
+    fareType: cheapest.flexibility?.name ?? null,
+    remaining: null,
+  };
 }
 
 export async function searchJourneys(params: {
@@ -132,12 +176,15 @@ export async function searchJourneys(params: {
     body
   );
 
-  const { journeys, fares } = response.data.journeySearch;
+  const { journeys, fares, sections = {}, alternatives = {} } =
+    response.data.journeySearch;
   const fareTypes = response.data.fareTypes ?? {};
   const allFares = Object.values(fares);
 
   return Object.values(journeys).map((journey) => {
-    const cheapestFare = findCheapestFareForJourney(journey, allFares);
+    // Try UK-style fare matching first, fall back to continental alternatives
+    const byLegs = findCheapestFareByLegs(journey, allFares);
+    const result = byLegs ?? findCheapestAlternative(journey, sections, alternatives);
 
     const durationMinutes = journey.duration
       ? parseIsoDuration(journey.duration)
@@ -147,9 +194,9 @@ export async function searchJourneys(params: {
             60_000
         );
 
-    const fareTypeName = cheapestFare
-      ? fareTypes[cheapestFare.fareType]?.name ?? null
-      : null;
+    const fareTypeName = byLegs
+      ? fareTypes[byLegs.fareType]?.name ?? null
+      : result?.fareType ?? null;
 
     return {
       journeyId: journey.id,
@@ -159,10 +206,10 @@ export async function searchJourneys(params: {
       originName: origin,
       destinationName: destination,
       changes: Math.max(0, journey.legs.length - 1),
-      cheapestPrice: cheapestFare?.fullPrice.amount ?? null,
-      currency: cheapestFare?.fullPrice.currencyCode ?? null,
+      cheapestPrice: result?.price ?? null,
+      currency: result?.currency ?? null,
       fareType: fareTypeName,
-      seatsRemaining: cheapestFare?.availability?.remaining ?? null,
+      seatsRemaining: result?.remaining ?? null,
     };
   });
 }
