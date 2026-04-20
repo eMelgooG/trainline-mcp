@@ -50,6 +50,8 @@ window opens so you can sign in (and solve a CAPTCHA if prompted). The session
 `.trainline-profile/`, so subsequent runs skip the login and rarely get
 challenged.
 
+> **First run:** The very first request can take 2–3 minutes while Chrome launches cold, DataDome fingerprints the fresh profile, and the session is established. Subsequent requests are fast (~2–3 seconds).
+
 The browser window stays open while the MCP server runs — it's the live
 session used for every API call. It closes automatically when the server
 stops. If DataDome challenges mid-session, the CAPTCHA will appear in that
