@@ -40,6 +40,21 @@ cp .env.example .env
 |----------|---------|-------------|
 | `TRAINLINE_USER_AGENT` | Chrome 124 UA | Browser User-Agent sent to Trainline |
 | `TRAINLINE_LOCALE` | `en-GB` | Locale for station names and prices |
+| `TRAINLINE_USER_DATA_DIR` | `./.trainline-profile` | Persistent Chrome profile directory |
+
+## How authentication works
+
+Trainline is protected by DataDome bot detection. On first use, a real Chrome
+window opens so you can sign in (and solve a CAPTCHA if prompted). The session
+— cookies, localStorage, and DataDome trust fingerprint — is persisted to
+`.trainline-profile/`, so subsequent runs skip the login and rarely get
+challenged.
+
+The browser window stays open while the MCP server runs — it's the live
+session used for every API call. It closes automatically when the server
+stops. If DataDome challenges mid-session, the CAPTCHA will appear in that
+window and the server will wait (up to 5 minutes) for you to solve it before
+retrying your request.
 
 ## Claude Desktop integration
 

@@ -72,7 +72,8 @@ async function fetchCheapestForDate(
       price: cheapest.fullPrice.amount,
       currency: cheapest.fullPrice.currencyCode,
     };
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[trainline] Error fetching ${date}: ${err instanceof Error ? err.message : String(err)}\n`);
     return { price: null, currency: null };
   }
 }

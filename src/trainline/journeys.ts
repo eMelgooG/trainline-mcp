@@ -15,36 +15,30 @@ export interface JourneyResult {
   journeyId: string;
 }
 
+interface Fare {
+  id: string;
+  fullPrice: { amount: number; currencyCode: string };
+  fareLegs: Array<{ legId: string }>;
+  fareType: string;
+  availability?: { status?: string; remaining?: number };
+}
+
+interface Journey {
+  id: string;
+  departAt: string;
+  arriveAt: string;
+  duration?: string;
+  legs: string[];
+}
+
 interface TrainlineJourneySearchResponse {
   data: {
     journeySearch: {
-      journeys: Record<
-        string,
-        {
-          id: string;
-          departAt: string;
-          arriveAt: string;
-          durationInMinutes?: number;
-          legs?: unknown[];
-          originName?: string;
-          destinationName?: string;
-        }
-      >;
-      fares: Record<
-        string,
-        {
-          id: string;
-          fareType: string;
-          journeyId: string;
-          fullPrice: { amount: number; currencyCode: string };
-          availability: { remaining?: number };
-        }
-      >;
-      fareTypes?: Record<string, { id: string; name: string }>;
+      journeys: Record<string, Journey>;
+      fares: Record<string, Fare>;
     };
     fareTypes?: Record<string, { id: string; name: string }>;
   };
-  // browserPost returns the raw JSON; Trainline wraps in { data: { journeySearch: ... } }
 }
 
 function buildRequestBody(
@@ -75,9 +69,32 @@ function buildRequestBody(
   };
 }
 
-/**
- * Search for train journeys between two stations on a given date.
- */
+// ISO 8601 duration "PT2H6M" → minutes
+function parseIsoDuration(iso: string): number {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?/.exec(iso);
+  if (!m) return 0;
+  const h = m[1] ? parseInt(m[1], 10) : 0;
+  const mn = m[2] ? parseInt(m[2], 10) : 0;
+  return h * 60 + mn;
+}
+
+function findCheapestFareForJourney(
+  journey: Journey,
+  fares: Fare[]
+): Fare | null {
+  const journeyLegIds = new Set(journey.legs);
+  // A fare is "for this journey" if it covers exactly this journey's legs
+  const matching = fares.filter(
+    (f) =>
+      f.fareLegs.length === journey.legs.length &&
+      f.fareLegs.every((fl) => journeyLegIds.has(fl.legId))
+  );
+  if (matching.length === 0) return null;
+  return matching.reduce((min, f) =>
+    f.fullPrice.amount < min.fullPrice.amount ? f : min
+  );
+}
+
 export async function searchJourneys(params: {
   origin: string;
   destination: string;
@@ -115,36 +132,23 @@ export async function searchJourneys(params: {
     body
   );
 
-  const { journeys, fares, fareTypes: journeyFareTypes } =
-    response.data.journeySearch;
-  const fareTypes = journeyFareTypes ?? response.data.fareTypes ?? {};
-
-  const faresByJourney: Record<
-    string,
-    Array<(typeof fares)[string]>
-  > = {};
-  for (const fare of Object.values(fares)) {
-    if (!faresByJourney[fare.journeyId]) faresByJourney[fare.journeyId] = [];
-    faresByJourney[fare.journeyId].push(fare);
-  }
+  const { journeys, fares } = response.data.journeySearch;
+  const fareTypes = response.data.fareTypes ?? {};
+  const allFares = Object.values(fares);
 
   return Object.values(journeys).map((journey) => {
-    const journeyFares = faresByJourney[journey.id] ?? [];
-    const cheapestFare =
-      journeyFares.length > 0
-        ? journeyFares.reduce((min, f) =>
-            f.fullPrice.amount < min.fullPrice.amount ? f : min
-          )
-        : null;
+    const cheapestFare = findCheapestFareForJourney(journey, allFares);
 
-    const durationMs =
-      new Date(journey.arriveAt).getTime() -
-      new Date(journey.departAt).getTime();
-    const durationMinutes =
-      journey.durationInMinutes ?? Math.round(durationMs / 60_000);
+    const durationMinutes = journey.duration
+      ? parseIsoDuration(journey.duration)
+      : Math.round(
+          (new Date(journey.arriveAt).getTime() -
+            new Date(journey.departAt).getTime()) /
+            60_000
+        );
 
     const fareTypeName = cheapestFare
-      ? (fareTypes[cheapestFare.fareType]?.name ?? cheapestFare.fareType)
+      ? fareTypes[cheapestFare.fareType]?.name ?? null
       : null;
 
     return {
@@ -152,13 +156,13 @@ export async function searchJourneys(params: {
       departureTime: journey.departAt,
       arrivalTime: journey.arriveAt,
       durationMinutes,
-      originName: journey.originName ?? origin,
-      destinationName: journey.destinationName ?? destination,
-      changes: journey.legs ? Math.max(0, journey.legs.length - 1) : 0,
+      originName: origin,
+      destinationName: destination,
+      changes: Math.max(0, journey.legs.length - 1),
       cheapestPrice: cheapestFare?.fullPrice.amount ?? null,
       currency: cheapestFare?.fullPrice.currencyCode ?? null,
       fareType: fareTypeName,
-      seatsRemaining: cheapestFare?.availability.remaining ?? null,
+      seatsRemaining: cheapestFare?.availability?.remaining ?? null,
     };
   });
 }
