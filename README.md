@@ -76,7 +76,7 @@ Add the following to `~/.copilot/mcp-config.json`:
 - Windows: `%USERPROFILE%\.copilot\mcp-config.json`
 - macOS/Linux: `~/.copilot/mcp-config.json`
 
-The change takes effect in your next Copilot CLI conversation — no restart needed.
+The change takes effect after restarting any active Copilot CLI session.
 
 
 ## Example prompts
