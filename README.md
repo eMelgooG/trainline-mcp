@@ -78,24 +78,6 @@ Add the following to `~/.copilot/mcp-config.json`:
 
 The change takes effect in your next Copilot CLI conversation — no restart needed.
 
-### Claude Desktop
-
-Add the following to your Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "trainline": {
-      "command": "node",
-      "args": ["/absolute/path/to/trainline-mcp/build/index.js"]
-    }
-  }
-}
-```
-
-**Config file locations:**
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ## Example prompts
 
