@@ -1,6 +1,6 @@
 # Trainline Web API — Reverse-Engineering Notes
 
-All endpoints are on `https://www.thetrainline.com`. No authentication required for search.
+All endpoints are on `https://www.thetrainline.com`. No authentication required for search, but requests must come through a real browser session to pass DataDome bot detection (see Bot Detection section below).
 
 ## Required headers
 
@@ -9,6 +9,7 @@ Accept: application/json
 Accept-Encoding: gzip, deflate, br
 Accept-Language: en-GB
 User-Agent: <realistic browser UA>
+x-version: <current Trainline app version>
 ```
 
 ---
@@ -69,39 +70,74 @@ The `code` field is the station identifier used in journey search.
 }
 ```
 
-**Key response fields:**
+### Response — UK operators (e.g. Avanti, LNER)
+
+Fares are keyed by fare ID and linked to journeys via `fareLegs`:
+
 ```
-data.journeySearch.journeys  — dict keyed by journey ID
+data.journeySearch.journeys   — dict keyed by journey ID
   .id
-  .departAt                  — ISO 8601 datetime
-  .arriveAt                  — ISO 8601 datetime
+  .departAt                   — ISO 8601 datetime
+  .arriveAt
   .durationInMinutes
-  .legs[]                    — array of legs (length - 1 = changes)
-  .originName
-  .destinationName
+  .legs[]                     — array of leg IDs (length - 1 = changes)
 
-data.journeySearch.fares     — dict keyed by fare ID
-  .fareType                  — references fareTypes dict
-  .journeyId                 — links to a journey
-  .fullPrice.amount          — numeric price
-  .fullPrice.currencyCode    — e.g. "GBP"
-  .availability.remaining    — seats left (optional)
+data.journeySearch.fares      — dict keyed by fare ID
+  .fareType
+  .journeyId                  — links to a journey
+  .fullPrice.amount
+  .fullPrice.currencyCode     — e.g. "GBP"
+  .fareLegs[].legId           — matches legs in the journey
 
-data.fareTypes               — dict keyed by fare type ID
-  .id
-  .name                      — e.g. "Advance", "Off-Peak"
+data.fareTypes                — dict keyed by fare type ID
+  .name                       — e.g. "Advance", "Off-Peak"
 ```
+
+### Response — Continental operators (e.g. Trenitalia, SNCF)
+
+Fares are nested inside `sections` → `alternatives` rather than a top-level `fares` dict:
+
+```
+data.journeySearch.journeys
+  .sections[]                 — array of section IDs
+
+data.journeySearch.sections   — dict keyed by section ID
+  .alternatives[]             — array of alternative IDs (one per fare option)
+
+data.journeySearch.alternatives — dict keyed by alternative ID
+  .fullPrice.amount
+  .fullPrice.currencyCode     — e.g. "EUR"
+  .legs[]                     — leg IDs for this alternative
+```
+
+> **Important:** Always check both schemas. A response may contain `fares` (UK) or `alternatives` (continental) or both if the route crosses operators.
 
 ---
 
 ## Price calendar
 
-No dedicated endpoint exists. Implemented by making one journey-search request per day with `maximumJourneys: 1` and reading the cheapest fare from the response. Requests are rate-limited to **3 concurrent** to avoid triggering bot detection.
+No dedicated endpoint exists. Implemented by making one journey-search request per day with `maximumJourneys: 1` and reading the cheapest fare from the response.
 
 ---
 
-## Bot detection notes
+## Bot detection (DataDome)
 
-- 403 with `"captcha"` in the body means the session was flagged.
-- Using a realistic `User-Agent` and keeping request rate low avoids this.
-- No CSRF token or cookie is required for anonymous searches.
+Trainline uses **DataDome** for bot detection. Raw HTTP requests will receive a `403` with a DataDome challenge body.
+
+### How the bypass works
+
+- All API calls are made via `page.evaluate()` inside a **persistent Playwright/Chromium browser context**
+- On first launch, a real Chrome window opens for the user to log in and solve any CAPTCHA manually
+- The session (cookies, localStorage, DataDome fingerprint) is persisted to `.trainline-profile/` on disk
+- Subsequent runs reuse the profile — no CAPTCHA is triggered in normal use
+- If a mid-session `403` occurs, the server waits up to 5 minutes for the user to solve the CAPTCHA in the open browser window, then retries automatically
+
+### Resilience observed
+
+- 100 rapid sequential calls (Rome → Naples, 5 batches of 20) — **0 blocks, 0 CAPTCHAs**
+- DataDome trust is robust once a real human session is established
+
+### First run
+
+The very first request on a fresh profile can take **2–3 minutes** while Chrome launches cold and DataDome fingerprints the new session. Subsequent requests respond in ~2–3 seconds.
+
