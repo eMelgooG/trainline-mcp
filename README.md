@@ -67,7 +67,7 @@ Add the following to `~/.copilot/mcp-config.json`:
   "mcpServers": {
     "trainline": {
       "command": "node",
-      "args": ["C:\\absolute\\path\\to\\trainline-mcp\\build\\index.js"]
+      "args": ["C:\\trainline-mcp\\build\\index.js"]
     }
   }
 }
