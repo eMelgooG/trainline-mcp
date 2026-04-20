@@ -56,7 +56,29 @@ stops. If DataDome challenges mid-session, the CAPTCHA will appear in that
 window and the server will wait (up to 5 minutes) for you to solve it before
 retrying your request.
 
-## Claude Desktop integration
+## Integration
+
+### GitHub Copilot CLI
+
+Add the following to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "trainline": {
+      "command": "node",
+      "args": ["C:\\absolute\\path\\to\\trainline-mcp\\build\\index.js"]
+    }
+  }
+}
+```
+
+- Windows: `%USERPROFILE%\.copilot\mcp-config.json`
+- macOS/Linux: `~/.copilot/mcp-config.json`
+
+The change takes effect in your next Copilot CLI conversation — no restart needed.
+
+### Claude Desktop
 
 Add the following to your Claude Desktop config (`claude_desktop_config.json`):
 
