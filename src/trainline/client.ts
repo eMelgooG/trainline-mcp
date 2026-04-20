@@ -1,5 +1,5 @@
-import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from "axios";
-import { chromium } from "playwright";
+import axios, { type AxiosInstance } from "axios";
+import { chromium, type Browser, type Page } from "playwright";
 
 const BASE_URL = "https://www.thetrainline.com";
 
@@ -9,6 +9,7 @@ const USER_AGENT =
 
 export const LOCALE = process.env.TRAINLINE_LOCALE ?? "en-GB";
 
+// Plain axios client — used only for unprotected endpoints (station search)
 export const client: AxiosInstance = axios.create({
   baseURL: BASE_URL,
   headers: {
@@ -20,79 +21,72 @@ export const client: AxiosInstance = axios.create({
   timeout: 30_000,
 });
 
-// --- Playwright session management ---
+// --- Persistent Playwright browser for protected endpoints ---
 
-let sessionCookies: string | null = null;
-let sessionInitialising = false;
-let sessionInitQueue: Array<() => void> = [];
+let browser: Browser | null = null;
+let page: Page | null = null;
+let initPromise: Promise<void> | null = null;
 
-async function initSession(): Promise<void> {
-  if (sessionCookies) return;
-  if (sessionInitialising) {
-    await new Promise<void>((resolve) => sessionInitQueue.push(resolve));
-    return;
+async function ensureBrowser(): Promise<Page> {
+  if (page) return page;
+
+  if (!initPromise) {
+    initPromise = (async () => {
+      process.stderr.write("[trainline] Launching browser…\n");
+      browser = await chromium.launch({ headless: true });
+      const context = await browser.newContext({
+        userAgent: USER_AGENT,
+        locale: LOCALE,
+        extraHTTPHeaders: { "Accept-Language": LOCALE },
+      });
+      page = await context.newPage();
+      await page.goto(BASE_URL, { waitUntil: "networkidle", timeout: 60_000 });
+      await page.waitForTimeout(2_000);
+      process.stderr.write("[trainline] Browser session ready\n");
+    })();
   }
-  sessionInitialising = true;
 
-  process.stderr.write("[trainline] Launching browser to establish session…\n");
-
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const context = await browser.newContext({ userAgent: USER_AGENT });
-    const page = await context.newPage();
-
-    await page.goto("https://www.thetrainline.com", {
-      waitUntil: "networkidle",
-      timeout: 60_000,
-    });
-
-    // Wait a moment to allow any JS-set cookies to be written
-    await page.waitForTimeout(2_000);
-
-    const cookies = await context.cookies();
-    const cookieHeader = cookies
-      .map((c) => `${c.name}=${c.value}`)
-      .join("; ");
-
-    sessionCookies = cookieHeader;
-    process.stderr.write(`[trainline] Session established (${cookies.length} cookies)\n`);
-  } finally {
-    await browser.close();
-    sessionInitialising = false;
-    const queue = sessionInitQueue;
-    sessionInitQueue = [];
-    queue.forEach((r) => r());
-  }
+  await initPromise;
+  return page!;
 }
 
-export function invalidateSession(): void {
-  sessionCookies = null;
-  process.stderr.write("[trainline] Session invalidated, will refresh on next request\n");
-}
+/**
+ * Make a POST request from within the browser context so that Trainline's
+ * bot-detection sees a genuine browser fingerprint, cookies, and TLS stack.
+ */
+export async function browserPost<T>(path: string, body: unknown): Promise<T> {
+  const p = await ensureBrowser();
 
-// Inject session cookies into every request
-client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-  await initSession();
-  if (sessionCookies) {
-    config.headers.Cookie = sessionCookies;
-  }
-  return config;
-});
+  const result = await p.evaluate(
+    async ({
+      url,
+      payload,
+      locale,
+    }: {
+      url: string;
+      payload: unknown;
+      locale: string;
+    }) => {
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Accept-Language": locale,
+          "x-version": "4.0",
+        },
+        body: JSON.stringify(payload),
+      });
 
-// On 403, invalidate session and retry once
-client.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 403 && !error.config._retried) {
-      process.stderr.write("[trainline] Got 403, refreshing session and retrying…\n");
-      invalidateSession();
-      error.config._retried = true;
-      await initSession();
-      if (sessionCookies) {
-        error.config.headers.Cookie = sessionCookies;
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
       }
-      return client.request(error.config);
-    }
-    return Promise.reject(error);
-  }
-);
+
+      return res.json() as unknown;
+    },
+    { url: `${BASE_URL}${path}`, payload: body, locale: LOCALE }
+  );
+
+  return result as T;
+}

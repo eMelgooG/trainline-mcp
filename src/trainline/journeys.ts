@@ -1,4 +1,4 @@
-import { client } from "./client.js";
+import { browserPost } from "./client.js";
 import { resolveStationCode } from "./stations.js";
 
 export interface JourneyResult {
@@ -44,6 +44,7 @@ interface TrainlineJourneySearchResponse {
     };
     fareTypes?: Record<string, { id: string; name: string }>;
   };
+  // browserPost returns the raw JSON; Trainline wraps in { data: { journeySearch: ... } }
 }
 
 function buildRequestBody(
@@ -109,14 +110,14 @@ export async function searchJourneys(params: {
     maxResults
   );
 
-  const response = await client.post<TrainlineJourneySearchResponse>(
+  const response = await browserPost<TrainlineJourneySearchResponse>(
     "/api/journey-search/",
     body
   );
 
   const { journeys, fares, fareTypes: journeyFareTypes } =
-    response.data.data.journeySearch;
-  const fareTypes = journeyFareTypes ?? response.data.data.fareTypes ?? {};
+    response.data.journeySearch;
+  const fareTypes = journeyFareTypes ?? response.data.fareTypes ?? {};
 
   const faresByJourney: Record<
     string,

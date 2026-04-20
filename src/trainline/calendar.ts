@@ -1,5 +1,5 @@
 import { resolveStationCode } from "./stations.js";
-import { client } from "./client.js";
+import { browserPost } from "./client.js";
 
 export interface CalendarDay {
   date: string;
@@ -55,13 +55,13 @@ async function fetchCheapestForDate(
 ): Promise<{ price: number | null; currency: string | null }> {
   try {
     const body = buildSingleDayBody(originCode, destinationCode, date, adults);
-    const response = await client.post<TrainlineJourneySearchResponse>(
+    const response = await browserPost<TrainlineJourneySearchResponse>(
       "/api/journey-search/",
       body
     );
 
     const fares = Object.values(
-      response.data.data.journeySearch.fares ?? {}
+      response.data.journeySearch.fares ?? {}
     );
     if (fares.length === 0) return { price: null, currency: null };
 
